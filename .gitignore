@@ -5,3 +5,7 @@ TrackEval/
 __pycache__/
 .ipynb_checkpoints/
 .pytest_cache/
+
+# Môi trường riêng cho lần thực hiện lab này.
+.lab_env/
+.lab_env_clean/

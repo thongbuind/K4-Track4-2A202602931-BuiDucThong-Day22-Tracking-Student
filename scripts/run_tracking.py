@@ -20,12 +20,14 @@ https://google.github.io/styleguide/pyguide.html
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from pathlib import Path
 from typing import Iterator, Tuple
 
 import cv2
 import numpy as np
+import torch
 from ultralytics import YOLO
 
 from boxmot.tracker_zoo import create_tracker, get_tracker_config
@@ -124,6 +126,9 @@ def run(args: argparse.Namespace) -> None:
         args: Tham số đã parse, gồm ``source``, ``seq_name``, ``tracker``,
             ``conf``, ``iou``, ``device``, ``out``, ``save_video``, ``fps``
             và ``max_frames``.
+
+    Raises:
+        ValueError: Khi một ảnh đầu vào không đọc được.
     """
     source = Path(args.source)
     out_dir = Path(args.out)
@@ -134,11 +139,12 @@ def run(args: argparse.Namespace) -> None:
     if args.tracker in USES_APPEARANCE:
         print(f"              tracker này dùng Re-ID: {REID_WEIGHTS.name} (tự tải nếu chưa có)")
     detector = YOLO(DETECTOR_WEIGHTS)
+    detector.to(args.device)
     tracker = create_tracker(
         tracker_type=args.tracker,
         tracker_config=get_tracker_config(args.tracker),
         reid_weights=REID_WEIGHTS,
-        device=args.device,
+        device=torch.device(args.device),
         half=False,
         per_class=False,
     )
@@ -150,7 +156,7 @@ def run(args: argparse.Namespace) -> None:
 
     for frame_idx, frame in iter_frames(source):
         if frame is None:
-            continue
+            raise ValueError(f"Không đọc được frame {frame_idx + 1} trong {source}")
         n_frames += 1
 
         dets = detect(detector, frame, conf=args.conf, iou=args.iou)
@@ -183,6 +189,8 @@ def run(args: argparse.Namespace) -> None:
 
         if args.max_frames and n_frames >= args.max_frames:
             break
+        if n_frames % 100 == 0:
+            print(f"[{args.seq_name}] Đã xử lý {n_frames} frame", flush=True)
 
     if writer is not None:
         writer.release()
@@ -191,6 +199,26 @@ def run(args: argparse.Namespace) -> None:
 
     dt = time.time() - t0
     fps = n_frames / dt if dt > 0 else 0.0
+    metadata = {
+        "video": args.seq_name,
+        "tracker": args.tracker,
+        "conf": args.conf,
+        "iou": args.iou,
+        "detector": DETECTOR_WEIGHTS,
+        "imgsz": IMG_SIZE,
+        "person_class": PERSON_CLASS_ID,
+        "reid": str(REID_WEIGHTS),
+        "device": args.device,
+        "max_frames": args.max_frames,
+        "frames_processed": n_frames,
+        "rows": len(rows),
+        "seconds": round(dt, 3),
+        "processing_fps": round(fps, 3),
+        "preview_fps": args.fps,
+    }
+    (out_dir / f"{args.seq_name}_meta.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     print(
         f"\n[{args.seq_name}] tracker={args.tracker} conf={args.conf} iou={args.iou} "
         f"-> {n_frames} frame trong {dt:.1f}s ({fps:.1f} FPS)"
@@ -212,7 +240,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tracker", required=True, choices=TRACKER_CHOICES)
     parser.add_argument("--conf", type=float, default=0.3, help="Ngưỡng confidence của detector")
     parser.add_argument("--iou", type=float, default=0.5, help="Ngưỡng IoU NMS của detector")
-    parser.add_argument("--device", default="cpu", help="'cpu', 'cuda:0', ...")
+    parser.add_argument("--device", default="cpu", help="'cpu', 'cuda:0', 'mps' (Apple Silicon), ...")
     parser.add_argument("--out", default="runs", help="Thư mục xuất kết quả")
     parser.add_argument("--save-video", action="store_true", help="Xuất video xem thử")
     parser.add_argument("--fps", type=int, default=20, help="FPS của video xem thử")
